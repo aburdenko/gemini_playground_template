@@ -39,6 +39,7 @@ fi
 
 
 # --- Environment Configuration ---
+export GEMINI_ASCII=1
 # This script now sources its configuration from the .env file in the project root.
 ENV_FILE=".env"
 if [ ! -f "$ENV_FILE" ]; then
@@ -52,29 +53,16 @@ fi
 # then exports the remaining VAR=value pairs.
 export $(grep -v '^#' "$ENV_FILE" | sed 's/#.*//' | xargs)
 
-# Fix non-existent credential paths in .env for portability (e.g. on Cloud Shell or macOS)
-python3 -c "
-import os
-env_file = '$ENV_FILE'
-if os.path.exists(env_file):
-    with open(env_file, 'r') as f:
-        lines = f.readlines()
-    changed = False
-    for i, line in enumerate(lines):
-        if line.startswith('SERVICE_ACCOUNT_KEY_FILE=') or line.startswith('GOOGLE_APPLICATION_CREDENTIALS='):
-            parts = line.split('=', 1)
-            val = parts[1].strip().strip('\"').strip('\'')
-            if val and not os.path.exists(val):
-                print(f'Unsetting invalid {parts[0]} path: {val}')
-                lines[i] = f'{parts[0]}=\"\"\n'
-                changed = True
-    if changed:
-        with open(env_file, 'w') as f:
-            f.writelines(lines)
-"
-
-# Re-read and export after potential automatic fixes
-export $(grep -v '^#' "$ENV_FILE" | sed 's/#.*//' | xargs)
+# --- Utility Installation ---
+# Ensure 'jq' and 'unzip' are installed early as they are used for configuration.
+if ! command -v jq &> /dev/null; then
+  echo "'jq' command not found. Attempting to install..."
+  sudo apt-get update && sudo apt-get install -y jq
+fi
+if ! command -v unzip &> /dev/null; then
+  echo "'unzip' command not found. Attempting to install..."
+  sudo apt-get update && sudo apt-get install -y unzip
+fi
 
 # --- Git User Configuration ---
 # Set git user.name and user.email if they are defined in the .env file.
@@ -122,6 +110,11 @@ fi
 if [ -n "$KEY_FILE" ]; then
   echo "Service Account key found at '$KEY_FILE'. Using it for authentication."
   export GOOGLE_APPLICATION_CREDENTIALS="$KEY_FILE"
+
+  # Ensure gcloud CLI is also authenticated with the service account
+  echo "Authenticating gcloud CLI with Service Account..."
+  gcloud auth activate-service-account --key-file="$KEY_FILE" --quiet
+
   # If PROJECT_ID is not already set in .env, extract it from the SA key.
   if [ -z "$PROJECT_ID" ]; then
     PROJECT_ID=$(jq -r .project_id "$KEY_FILE")
@@ -146,6 +139,14 @@ else
     fi
   else
     echo "User already logged in with Application Default Credentials."
+  fi
+
+  # Ensure user is also logged in to gcloud CLI for commands like 'gcloud projects describe'
+  if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" | grep -q . ; then
+    echo "User is not logged in to gcloud CLI. Running 'gcloud auth login'..."
+    if ! gcloud auth login --no-launch-browser; then
+      echo "WARNING: gcloud auth login failed. Some setup steps may fail if gcloud is not authenticated." >&2
+    fi
   fi
 
   # If PROJECT_ID is not set from .env, try to get it from gcloud config.
@@ -191,9 +192,6 @@ fi
 echo "Setting active gcloud project to: $PROJECT_ID"
 gcloud config set project "$PROJECT_ID"
 
-# Get project number, which is needed for some service agent roles
-PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
-
 # --- Virtual Environment Setup ---
 if [ ! -d ".venv/python3.12" ]; then
   echo "Python virtual environment '.python3.12' not found."
@@ -201,40 +199,31 @@ if [ ! -d ".venv/python3.12" ]; then
   sudo apt update && sudo apt install -y python3-venv
   echo "Creating Python virtual environment '.venv/python3.12'..."
   /usr/bin/python3 -m venv .venv/python3.12
-  echo "Installing dependencies into .venv/python3.12 from requirements.txt..."
   
-  # Grant the Vertex AI Service Agent the necessary role on your staging bucket
-  gcloud storage buckets add-iam-policy-binding gs://$SOURCE_GCS_BUCKET \
-    --member="serviceAccount:service-$PROJECT_NUMBER@gcp-sa-aiplatform.iam.gserviceaccount.com" \
-    --role="roles/storage.objectViewer"
+  # Get project number, which is needed for granting service agent roles.
+  # This is only done once during initial setup to avoid errors on every shell start.
+  PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
+
+  if [ -n "$PROJECT_NUMBER" ]; then
+    echo "Configuring IAM roles for Vertex AI Service Agent..."
+    # Grant the Vertex AI Service Agent the necessary role on your source bucket
+    gcloud storage buckets add-iam-policy-binding gs://$SOURCE_GCS_BUCKET \
+      --member="serviceAccount:service-$PROJECT_NUMBER@gcp-sa-aiplatform.iam.gserviceaccount.com" \
+      --role="roles/storage.objectViewer" --quiet
 
     # Grant the Vertex AI Service Agent the necessary role on your staging bucket
-  gcloud storage buckets add-iam-policy-binding gs://$STAGING_GCS_BUCKET \
-    --member="serviceAccount:service-$PROJECT_NUMBER@gcp-sa-aiplatform.iam.gserviceaccount.com" \
-    --role="roles/storage.objectViewer"
+    gcloud storage buckets add-iam-policy-binding gs://$STAGING_GCS_BUCKET \
+      --member="serviceAccount:service-$PROJECT_NUMBER@gcp-sa-aiplatform.iam.gserviceaccount.com" \
+      --role="roles/storage.objectViewer" --quiet
 
-  # Grant the Vertex AI Service Agent the necessary role to create objects in the staging bucket
-  gcloud storage buckets add-iam-policy-binding gs://$STAGING_GCS_BUCKET \
-    --member="serviceAccount:service-$PROJECT_NUMBER@gcp-sa-aiplatform.iam.gserviceaccount.com" \
-    --role="roles/storage.objectCreator"
-
-  # Grant the Vertex AI Service Agent the necessary role to create objects in the staging bucket
-  gcloud storage buckets add-iam-policy-binding gs://$STAGING_GCS_BUCKET \
-    --member="serviceAccount:service-$PROJECT_NUMBER@gcp-sa-aiplatform.iam.gserviceaccount.com" \
-    --role="roles/storage.objectCreator"
+    # Grant the Vertex AI Service Agent the necessary role to create objects in the staging bucket
+    gcloud storage buckets add-iam-policy-binding gs://$STAGING_GCS_BUCKET \
+      --member="serviceAccount:service-$PROJECT_NUMBER@gcp-sa-aiplatform.iam.gserviceaccount.com" \
+      --role="roles/storage.objectCreator" --quiet
+  else
+    echo "WARNING: Could not determine PROJECT_NUMBER. Skipping Vertex AI Service Agent IAM configuration." >&2
+  fi
     
-  # --- Ensure 'unzip' is installed for VSIX validation ---
-  if ! command -v unzip &> /dev/null; then
-    echo "'unzip' command not found. Attempting to install..."
-    sudo apt-get update && sudo apt-get install -y unzip
-  fi
-
-  # --- Ensure 'jq' is installed for robust JSON parsing ---
-  if ! command -v jq &> /dev/null; then
-    echo "'jq' command not found. Attempting to install..."
-    sudo apt-get update && sudo apt-get install -y jq
-  fi
-
   # --- VS Code Extension Setup (One-time) ---
   echo "Checking for 'emeraldwalk.runonsave' VS Code extension..."
   # Use the full path to the executable, which we know from the environment
@@ -415,7 +404,7 @@ export PATH=$PATH:$HOME/.local/bin:.scripts
 uv tool install google-agents-cli
 
 (type -p wget >/dev/null || (sudo apt update && sudo apt install wget -y)) \
-        && sudo apt update && sudo apt install xvfb libxkbcommon0 libgtk-3-0 -y \
+        && sudo apt update && sudo apt install xvfb libxkbcommon0 -y \
         && sudo mkdir -p -m 755 /etc/apt/keyrings \
         && out=$(mktemp) && wget -nv -O$out https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         && cat $out | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
@@ -449,10 +438,6 @@ if [ ! -f "$HOME/.config/rclone/rclone.conf" ] && [ ! -f "$HOME/.config/rclone/.
     case "$choice" in 
         [yY]|[yY][eE][sS])
             echo ""
-            echo "Ensuring rclone and fuse3 are installed..."
-            if ! command -v rclone &> /dev/null || ! command -v fusermount3 &> /dev/null; then
-                sudo apt-get update && sudo apt-get install -y rclone fuse3
-            fi
             echo "Let's configure rclone now so your Google Drive auto-mounts on startup!"
             echo "Please follow the interactive prompts (name the remote 'gdrive'):"
             echo ""
@@ -467,25 +452,18 @@ if [ ! -f "$HOME/.config/rclone/rclone.conf" ] && [ ! -f "$HOME/.config/rclone/.
             touch "$HOME/.config/rclone/.gdrive_opt_out"
             ;;
     esac
-elif [ -f "$HOME/.config/rclone/rclone.conf" ]; then
-    echo "Google Drive configuration verified (~/.config/rclone/rclone.conf)."
 fi
 
-# --- Mount Google Drive if configured and not already mounted ---
 if [ -f "$HOME/.config/rclone/rclone.conf" ]; then
-    # Ensure rclone and fuse3 are installed if rclone.conf exists but they aren't
-    if ! command -v rclone &> /dev/null || ! command -v fusermount3 &> /dev/null; then
-        echo "Ensuring rclone and fuse3 are installed..."
-        sudo apt-get update && sudo apt-get install -y rclone fuse3
-    fi
-
-    if ! mount | grep -q " /mnt/gdrive "; then
-        echo "Creating mount point /mnt/gdrive..."
-        sudo mkdir -p /mnt/gdrive
-        sudo chown -R $(whoami):$(whoami) /mnt/gdrive
-        echo "Mounting Google Drive to /mnt/gdrive..."
-        rclone mount gdrive: /mnt/gdrive --daemon --vfs-cache-mode writes
-    else
+    echo "Google Drive configuration verified (~/.config/rclone/rclone.conf)."
+    if mountpoint -q /mnt/gdrive; then
         echo "Google Drive is already mounted at /mnt/gdrive."
+    else
+        echo "Mounting Google Drive to /mnt/gdrive..."
+        if [ ! -d "/mnt/gdrive" ]; then
+            sudo mkdir -p /mnt/gdrive
+            sudo chown -R $(whoami):$(id -gn) /mnt/gdrive
+        fi
+        rclone mount gdrive: /mnt/gdrive --vfs-cache-mode writes --daemon
     fi
 fi
