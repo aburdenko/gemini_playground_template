@@ -1,27 +1,16 @@
 # Usage: source .scripts/configure.sh
 
-# --- Gemini CLI Installation/Update ---
-if ! command -v npm &> /dev/null; then
-  echo "Error: npm is not installed. Please install Node.js and npm to continue." >&2
-  return 1
-fi
-
-echo "Checking for the latest Gemini CLI version..."
-LATEST_VERSION=$(npm view @google/gemini-cli version)
-
-if ! command -v gemini &> /dev/null; then
-  echo "Gemini CLI not found. Installing the latest version ($LATEST_VERSION)..."
-  sudo npm install -g @google/gemini-cli@latest
+# --- Antigravity CLI Verification ---
+if [ -f "/app/antigravity" ]; then
+    echo "Antigravity CLI verified at /app/antigravity."
+    export PATH="/app:$PATH"
+elif [ -f "$HOME/.local/bin/agy" ]; then
+    echo "Antigravity CLI verified at $HOME/.local/bin/agy."
+    export PATH="$HOME/.local/bin:$PATH"
+elif command -v antigravity &> /dev/null; then
+    echo "Antigravity CLI verified on PATH."
 else
-  # Extract vergeminision from `npm list`, which is more reliable than `gemini --version`
-  INSTALLED_VERSION=$(npm list -g @google/gemini-cli --depth=0 2>/dev/null | grep '@google/gemini-cli' | sed 's/.*@//')
-  if [ "$INSTALLED_VERSION" == "$LATEST_VERSION" ]; then
-    echo "Gemini CLI is already up to date (version $INSTALLED_VERSION)."
-  else
-    echo "A new version of Gemini CLI is available."
-    echo "Upgrading from version $INSTALLED_VERSION to $LATEST_VERSION..."
-    sudo npm install -g @google/gemini-cli@latest
-  fi
+    echo "Warning: Antigravity CLI not found." >&2
 fi
 
 
@@ -413,7 +402,14 @@ uv tool install google-agents-cli
         && sudo apt install gh -y
 
 unset GOOGLE_API_KEY GEMINI_API_KEY
-alias gemini="gemini -m $GEMINI_MODEL_NAME --yolo"
+# Alias gemini and agy to the Antigravity CLI
+if command -v antigravity &> /dev/null; then
+    alias gemini="antigravity -m $GEMINI_MODEL_NAME --yolo"
+    alias agy="antigravity"
+elif command -v agy &> /dev/null; then
+    alias gemini="agy -m $GEMINI_MODEL_NAME --yolo"
+    alias agy="agy"
+fi
 npx --yes skills install -y -g github.com/google/skills
 
 
