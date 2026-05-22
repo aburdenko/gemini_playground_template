@@ -13,6 +13,30 @@ else
     echo "Warning: Antigravity CLI not found." >&2
 fi
 
+# --- Gemini CLI Installation/Update ---
+if ! command -v npm &> /dev/null; then
+  echo "Error: npm is not installed. Please install Node.js and npm to continue." >&2
+  return 1
+fi
+
+echo "Checking for the latest Gemini CLI version..."
+LATEST_VERSION=$(npm view @google/gemini-cli version)
+
+if ! command -v gemini &> /dev/null; then
+  echo "Gemini CLI not found. Installing the latest version ($LATEST_VERSION)..."
+  sudo npm install -g @google/gemini-cli@latest
+else
+  # Extract version from `npm list`, which is more reliable than `gemini --version`
+  INSTALLED_VERSION=$(npm list -g @google/gemini-cli --depth=0 2>/dev/null | grep '@google/gemini-cli' | sed 's/.*@//')
+  if [ "$INSTALLED_VERSION" == "$LATEST_VERSION" ]; then
+    echo "Gemini CLI is already up to date (version $INSTALLED_VERSION)."
+  else
+    echo "A new version of Gemini CLI is available."
+    echo "Upgrading from version $INSTALLED_VERSION to $LATEST_VERSION..."
+    sudo npm install -g @google/gemini-cli@latest
+  fi
+fi
+
 
 # --- Environment Configuration ---
 # This script now sources its configuration from the .env file in the project root.
@@ -402,13 +426,15 @@ uv tool install google-agents-cli
         && sudo apt install gh -y
 
 unset GOOGLE_API_KEY GEMINI_API_KEY
-# Alias gemini and agy to the Antigravity CLI
+# Alias gemini and agy to their respective CLIs
 if command -v antigravity &> /dev/null; then
-    alias gemini="antigravity -m $GEMINI_MODEL_NAME --yolo"
     alias agy="antigravity"
 elif command -v agy &> /dev/null; then
-    alias gemini="agy -m $GEMINI_MODEL_NAME --yolo"
     alias agy="agy"
+fi
+
+if command -v gemini &> /dev/null; then
+    alias gemini="gemini -m $GEMINI_MODEL_NAME --yolo"
 fi
 npx --yes skills install -y -g github.com/google/skills
 
