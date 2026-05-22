@@ -415,7 +415,7 @@ export PATH=$PATH:$HOME/.local/bin:.scripts
 uv tool install google-agents-cli
 
 (type -p wget >/dev/null || (sudo apt update && sudo apt install wget -y)) \
-        && sudo apt update && sudo apt install xvfb libxkbcommon0 -y \
+        && sudo apt update && sudo apt install xvfb libxkbcommon0 libgtk-3-0 -y \
         && sudo mkdir -p -m 755 /etc/apt/keyrings \
         && out=$(mktemp) && wget -nv -O$out https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         && cat $out | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
@@ -449,6 +449,10 @@ if [ ! -f "$HOME/.config/rclone/rclone.conf" ] && [ ! -f "$HOME/.config/rclone/.
     case "$choice" in 
         [yY]|[yY][eE][sS])
             echo ""
+            echo "Ensuring rclone and fuse3 are installed..."
+            if ! command -v rclone &> /dev/null || ! command -v fusermount3 &> /dev/null; then
+                sudo apt-get update && sudo apt-get install -y rclone fuse3
+            fi
             echo "Let's configure rclone now so your Google Drive auto-mounts on startup!"
             echo "Please follow the interactive prompts (name the remote 'gdrive'):"
             echo ""
@@ -465,4 +469,23 @@ if [ ! -f "$HOME/.config/rclone/rclone.conf" ] && [ ! -f "$HOME/.config/rclone/.
     esac
 elif [ -f "$HOME/.config/rclone/rclone.conf" ]; then
     echo "Google Drive configuration verified (~/.config/rclone/rclone.conf)."
+fi
+
+# --- Mount Google Drive if configured and not already mounted ---
+if [ -f "$HOME/.config/rclone/rclone.conf" ]; then
+    # Ensure rclone and fuse3 are installed if rclone.conf exists but they aren't
+    if ! command -v rclone &> /dev/null || ! command -v fusermount3 &> /dev/null; then
+        echo "Ensuring rclone and fuse3 are installed..."
+        sudo apt-get update && sudo apt-get install -y rclone fuse3
+    fi
+
+    if ! mount | grep -q " /mnt/gdrive "; then
+        echo "Creating mount point /mnt/gdrive..."
+        sudo mkdir -p /mnt/gdrive
+        sudo chown -R $(whoami):$(whoami) /mnt/gdrive
+        echo "Mounting Google Drive to /mnt/gdrive..."
+        rclone mount gdrive: /mnt/gdrive --daemon --vfs-cache-mode writes
+    else
+        echo "Google Drive is already mounted at /mnt/gdrive."
+    fi
 fi
