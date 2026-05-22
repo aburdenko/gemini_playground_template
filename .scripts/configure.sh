@@ -426,11 +426,11 @@ uv tool install google-agents-cli
         && sudo apt install gh -y
 
 unset GOOGLE_API_KEY GEMINI_API_KEY
-# Alias gemini and agy to their respective CLIs
+# Alias gemini and agy to their respective CLIs with explicit auto-login project binding
 if command -v antigravity &> /dev/null; then
-    alias agy="antigravity"
+    alias agy="PROJECT_ID=\$PROJECT_ID GOOGLE_CLOUD_PROJECT=\$PROJECT_ID antigravity"
 elif command -v agy &> /dev/null; then
-    alias agy="agy"
+    alias agy="PROJECT_ID=\$PROJECT_ID GOOGLE_CLOUD_PROJECT=\$PROJECT_ID agy"
 fi
 
 if command -v gemini &> /dev/null; then
