@@ -416,10 +416,10 @@ uv tool install google-agents-cli
 
 unset GOOGLE_API_KEY GEMINI_API_KEY
 # Alias gemini and agy to their respective CLIs with explicit auto-login project binding
-if command -v antigravity &> /dev/null; then
-    alias agy="PROJECT_ID=\$PROJECT_ID GOOGLE_CLOUD_PROJECT=\$PROJECT_ID antigravity"
-elif command -v agy &> /dev/null; then
+if command -v agy &> /dev/null; then
     alias agy="PROJECT_ID=\$PROJECT_ID GOOGLE_CLOUD_PROJECT=\$PROJECT_ID agy"
+elif command -v antigravity &> /dev/null; then
+    alias agy="PROJECT_ID=\$PROJECT_ID GOOGLE_CLOUD_PROJECT=\$PROJECT_ID antigravity"
 fi
 
 if command -v gemini &> /dev/null; then
